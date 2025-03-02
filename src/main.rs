@@ -1,16 +1,18 @@
-use std::net::{SocketAddr, UdpSocket};
+use std::cmp::{max, min};
+use std::net::{UdpSocket};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration};
 use macroquad::prelude::*;
 use flatbuffers::{root, FlatBufferBuilder, Push};
 use flatbuffers;
-use macroquad::miniquad::window::set_window_size;
+use macroquad::miniquad::conf::Platform;
+use macroquad::miniquad::window::{screen_size, set_window_size};
 
 #[allow(dead_code, unused_imports)]
 #[path = "../players_list_generated.rs"]
 mod players_list_generated;
-use crate::players_list_generated::{Color, Player, PlayersList, PlayersListArgs};
+use crate::players_list_generated::{Color, PlayersList};
 #[path = "../player_commands_generated.rs"]
 mod player_commands_generated;
 use crate::player_commands_generated::{PlayerCommand, PlayerCommands, PlayerCommandsArgs};
@@ -18,15 +20,15 @@ use crate::player_commands_generated::{PlayerCommand, PlayerCommands, PlayerComm
 const MAX_PLAYERS: usize = 10;
 const GRAVITY: f32 = 1.0;
 const FRICTION: f32 = 1.0;
-
 const TICK_DURATION: Duration = Duration::from_millis(1);
+const SERVER_ADDR: &str = "127.0.0.1:9000";
+const CLIENT_ADDR: &str = "127.0.0.1:3000";
+const SCALE: f32 = 2.0;
+const PLAYER_SIZE: f32 = 16.0;
 
 struct Player1 {
     id: Option<usize>,
     pos: Vec2,
-    vel: Vec2,
-    acc: f32,
-    jump_force: f32,
     color: Color,
 }
 
@@ -35,9 +37,6 @@ impl Player1 {
         Player1 {
             id: None,
             pos: Vec2::ZERO,
-            vel: Vec2::ZERO,
-            acc: 1.0,
-            jump_force: 10.0,
             color: Color::Red,
         }
     }
@@ -45,22 +44,41 @@ impl Player1 {
 struct OwnedPlayer {
     x: f32,
     y: f32,
-    color: Color
+    color: Color,
 }
 
-#[macroquad::main("Multi")]
+struct Resolution {
+    width: f32,
+    height: f32,
+    scale: f32,
+}
+
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Multi".to_owned(),
+        window_width: 640,
+        window_height: 360,
+        high_dpi: false,
+        fullscreen: false,
+        sample_count: 1,
+        window_resizable: true,
+        icon: None,
+        platform: Default::default(),
+    }
+}
+
+#[macroquad::main(window_conf)]
 async fn main() {
     let mut player = Player1 {
         id: Some(0),
         pos: Vec2::ZERO,
-        vel: Vec2::ZERO,
-        acc: 1.0,
-        jump_force: 10.0,
         color: Color::Red,
     };
 
-    set_window_size(600,400);
-    let socket = Arc::new(UdpSocket::bind("127.0.0.1:3003").unwrap());
+    let mut scale = 1.0;
+    change_resolution(Resolution { width: 640.0, height: 360.0, scale: 1.0 }, &mut scale);
+
+    let socket = Arc::new(UdpSocket::bind(CLIENT_ADDR).unwrap());
     let mut players: Arc<Mutex<Vec<OwnedPlayer>>> = Arc::new(Mutex::new(Vec::new()));
     let mut commands: Vec<PlayerCommand> = Vec::new();
 
@@ -69,13 +87,14 @@ async fn main() {
 
     thread::spawn(move || {
         let mut buf = [0u8; 2048];
-       loop {
-           let (amt, src_addr) = socket.recv_from(&mut buf).unwrap();
-           let mut players_guard = players.lock().unwrap();
-           handle_packet(&buf[..amt], &mut players_guard);
+        loop {
+            let (amt, src_addr) = socket.recv_from(&mut buf).unwrap();
+            if src_addr.to_string() != SERVER_ADDR { continue; };
+            let mut players_guard = players.lock().unwrap();
+            handle_packet(&buf[..amt], &mut players_guard);
 
-           drop(players_guard);
-       }
+            drop(players_guard);
+        }
     });
 
     loop {
@@ -87,72 +106,49 @@ async fn main() {
                 commands: Some(commands_vec)
             });
             builder.finish(player_command, None);
-            let bytes= builder.finished_data();
-            tick_socket.send_to(&bytes, "127.0.0.1:9000").expect("Packet couldn't send.");
+            let bytes = builder.finished_data();
+            tick_socket.send_to(&bytes, SERVER_ADDR).expect("Packet couldn't send.");
         }
         commands.clear();
 
-        physics(&mut player);
         let players_guard = tick_players.lock().unwrap();
-        render(&player, &players_guard);
+        render(&player, &players_guard, scale);
         drop(players_guard);
         next_frame().await;
     }
 }
 
 fn handle_packet(packet: &[u8], players: &mut Vec<OwnedPlayer>) {
-    //println!("Packet received from server");
     let players_list = root::<PlayersList>(packet).expect("No players received.");
     if let Some(player_vec) = players_list.players() {
-        println!("{:?}", player_vec);
         players.clear();
         for p in player_vec {
-            players.push(OwnedPlayer { x: p.x(), y: p.y(), color: p.color()});
+            players.push(OwnedPlayer { x: p.x(), y: p.y(), color: p.color() });
         }
     }
 }
 
-fn physics(player: &mut Player1) {
-    /*player.pos.x = player.pos.x + player.vel.x;
-    player.pos.y = player.pos.y + player.vel.y;
-    player.vel.x *= FRICTION;
-    player.vel.y += GRAVITY;
-
-    if player.pos.y > screen_height() - 10.0 {
-        player.pos.y = screen_height() - 10.0;
-        player.vel.y = 0.0;
-    }
-    if player.pos.y < 0.0 {
-        player.pos.y = 0.0;
-        player.vel.y = 0.0;
-    }
-    if player.pos.x > screen_width() - 10.0 {
-        player.pos.x = screen_width() - 10.0;
-        player.vel.x = 0.0;
-    }
-    if player.pos.x < 0.0 {
-        player.pos.x = 0.0;
-        player.vel.x = 0.0;
-    }*/
-}
-
-fn render(player: &Player1, players: &MutexGuard<Vec<OwnedPlayer>>) {
+fn render(player: &Player1, players: &MutexGuard<Vec<OwnedPlayer>>, scale: f32) {
     clear_background(BLACK);
     for p in players.iter() {
-        draw_rectangle(p.x, p.y, 10.0, 10.0, RED);
-        println!("{}, {}", p.x, p.y);
+        draw_rectangle(p.x * scale, p.y * scale, PLAYER_SIZE * scale, PLAYER_SIZE * scale, RED);
+        //println!("{}, {}", p.x, p.y);
     }
 }
 
 fn input_handler(commands: &mut Vec<PlayerCommand>) {
-    if is_key_down(KeyCode::Right) {
-        println!("Moving right");
+    if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
         commands.push(PlayerCommand::Move_right);
     }
-    if is_key_down(KeyCode::Left) {
+    if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
         commands.push(PlayerCommand::Move_left);
     }
-    if is_key_pressed(KeyCode::Up) {
+    if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) || is_key_down(KeyCode::Space) {
         commands.push(PlayerCommand::Jump);
     }
+}
+
+fn change_resolution(resolution: Resolution, scale: &mut f32) {
+    request_new_screen_size(resolution.width, resolution.height);
+    *scale = resolution.scale;
 }
