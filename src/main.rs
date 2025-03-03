@@ -1,4 +1,3 @@
-use std::cmp::{max, min};
 use std::net::{UdpSocket};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -6,8 +5,6 @@ use std::time::{Duration};
 use macroquad::prelude::*;
 use flatbuffers::{root, FlatBufferBuilder, Push};
 use flatbuffers;
-use macroquad::miniquad::conf::Platform;
-use macroquad::miniquad::window::{screen_size, set_window_size};
 
 #[allow(dead_code, unused_imports)]
 #[path = "../players_list_generated.rs"]
@@ -22,7 +19,7 @@ const GRAVITY: f32 = 1.0;
 const FRICTION: f32 = 1.0;
 const TICK_DURATION: Duration = Duration::from_millis(1);
 const SERVER_ADDR: &str = "127.0.0.1:9000";
-const CLIENT_ADDR: &str = "127.0.0.1:3000";
+const CLIENT_ADDR: &str = "127.0.0.1:3001";
 const SCALE: f32 = 2.0;
 const PLAYER_SIZE: f32 = 16.0;
 
@@ -130,9 +127,9 @@ fn handle_packet(packet: &[u8], players: &mut Vec<OwnedPlayer>) {
 
 fn render(player: &Player1, players: &MutexGuard<Vec<OwnedPlayer>>, scale: f32) {
     clear_background(BLACK);
-    for p in players.iter() {
-        draw_rectangle(p.x * scale, p.y * scale, PLAYER_SIZE * scale, PLAYER_SIZE * scale, RED);
-        //println!("{}, {}", p.x, p.y);
+    let colors = vec![RED, BLUE, GREEN, PURPLE, ORANGE, BEIGE, PINK];
+    for (index, p) in players.iter().enumerate() {
+        draw_rectangle(p.x * scale, p.y * scale, PLAYER_SIZE * scale, PLAYER_SIZE * scale, colors[index % colors.len()]);
     }
 }
 
